@@ -1,0 +1,88 @@
+menu "OpenIris: USB Camera (UVC host) Configuration"
+
+    config CAMERA_INPUT_USB_UVC
+        bool "Use a USB (UVC) camera on the USB-C port as the camera input"
+        default false
+        help
+            Replaces the on-board DVP camera (OV2640/OV5640/GC0308) with a USB Video
+            Class camera attached to the ESP32-S3 native USB port (GPIO19/20, the
+            USB-C connector on the XIAO ESP32S3).
+
+            IMPORTANT: the ESP32-S3 has a single USB PHY shared between the USB-OTG
+            controller and the USB-Serial-JTAG controller, so while this option is
+            enabled the device can NOT act as a USB device at the same time. That means:
+              * GENERAL_INCLUDE_UVC_MODE (USB webcam output) is unavailable, and
+              * the USB-Serial-JTAG console must be disabled (use UART0 instead).
+            Both are enforced below.
+
+            Frames are still delivered to the PC over Wi-Fi (StreamServer) exactly as
+            with the built-in camera. Bandwidth note: the ESP32-S3 USB-OTG controller
+            is USB 1.1 Full-Speed (12 Mbit/s), so ~0.9 MB/s of usable video payload.
+
+    config CAMERA_UVC_VID
+        hex "UVC camera Vendor ID filter (0x0 = accept any)"
+        default 0x0
+        help
+            Leave at 0x0 to bind to the first UVC camera that enumerates.
+
+    config CAMERA_UVC_PID
+        hex "UVC camera Product ID filter (0x0 = accept any)"
+        default 0x0
+
+    choice CAMERA_UVC_FORMAT
+        prompt "UVC stream format to request"
+        default CAMERA_UVC_FORMAT_MJPEG
+        help
+            MJPEG is strongly preferred: the frames are already JPEG, so they are
+            forwarded to the eye-tracking host untouched. YUY2/uncompressed has to be
+            JPEG-encoded on the ESP32 and is usually too wide for Full-Speed USB.
+
+        config CAMERA_UVC_FORMAT_MJPEG
+            bool "MJPEG (recommended)"
+
+        config CAMERA_UVC_FORMAT_YUY2
+            bool "YUY2 / uncompressed (re-encoded to JPEG on device)"
+    endchoice
+
+    config CAMERA_UVC_WIDTH
+        int "Frame width (pixels)"
+        default 240
+        range 16 1920
+        help
+            Must be a resolution the camera actually advertises in its UVC
+            descriptors -- the driver logs every supported mode at connect time.
+            EyeTrackVR's default is 240x240.
+
+    config CAMERA_UVC_HEIGHT
+        int "Frame height (pixels)"
+        default 240
+        range 16 1080
+
+    config CAMERA_UVC_FPS
+        int "Requested frame rate (FPS)"
+        default 60
+        range 1 240
+        help
+            Realistic ceiling over USB 1.1 Full-Speed is roughly:
+              240x240 MJPEG ~ 60-120 fps, 320x240 MJPEG ~ 30-60 fps,
+              640x480 MJPEG ~ 15-30 fps, anything uncompressed far less.
+
+    config CAMERA_UVC_JPEG_QUALITY
+        int "JPEG quality for YUY2 -> JPEG conversion (0-63, lower = better)"
+        default 12
+        range 0 63
+        depends on CAMERA_UVC_FORMAT_YUY2
+
+    config CAMERA_UVC_BUFFER_COUNT
+        int "Number of UVC frame buffers"
+        default 3
+        range 2 8
+        help
+            Buffers are allocated in PSRAM. Triple buffering is recommended.
+
+    config CAMERA_UVC_URB_COUNT
+        int "Number of USB Request Blocks (URBs) per stream"
+        default 4
+        range 2 16
+
+endmenu

@@ -1,0 +1,305 @@
+menu "ENV_Caps"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+endmenu
+
+menu "OpenIris: General Configuration"
+
+    config START_IN_UVC_MODE
+        bool "Default initial streaming mode = UVC"
+        default false
+        help
+            Sets the power‑on default streaming mode (before any user preference is stored).
+            If enabled AND UVC support is compiled in (GENERAL_INCLUDE_UVC_MODE), the device
+            will default to UVC mode on first boot. If disabled it defaults to SETUP mode,
+            waiting for a user choice or commands. This option does NOT compile UVC support in;
+            it only changes the initial preference used when no saved mode exists.
+
+    config GENERAL_INCLUDE_UVC_MODE
+        bool "Include UVC (USB Video Class) support"
+        default false
+        depends on !CAMERA_INPUT_USB_UVC
+        help
+            Compiles in UVC (USB Video Class) streaming support (camera + CDC bridge).
+            Disable this on boards that are Wi‑Fi only or where USB bandwidth / memory
+            should be conserved. If disabled any attempt to switch to UVC mode will log
+            an error and fall back to Wi‑Fi (if wireless is enabled). Combine with
+            START_IN_UVC_MODE only when the hardware supports UVC.
+
+            Not available when CAMERA_INPUT_USB_UVC is enabled: the ESP32-S3 has a
+            single USB PHY shared by the USB-OTG and USB-Serial-JTAG controllers, so
+            the port cannot be a USB host for a camera and a USB device for the PC at
+            the same time.
+
+    config GENERAL_STARTUP_DELAY
+        int "Setup grace period (s)"
+        default 20
+        range 10 10000
+        help
+            Number of seconds the device remains in SETUP / heartbeat mode on boot (when the
+            current streaming mode resolves to SETUP) before automatically launching the
+            selected streaming backend (UVC or Wi‑Fi). During this window host commands can
+            change mode or other settings. After the timer expires, streaming starts
+            automatically unless a command was received or startup was paused.
+
+    config GENERAL_ENABLE_WIRELESS
+        bool "Enable wireless (WiFi/Bluetooth)"
+        default y
+        help
+            When disabled, the firmware will not start WiFi or related services (mDNS/REST),
+            and any Bluetooth memory (if present on the SoC) should be left released. This can
+            reduce power consumption when operating solely in UVC mode or without networking.
+
+    config GENERAL_BOARD
+        string "Board / device identifier"
+        default "OpenIris"
+        help
+            A human-readable board or device identifier exposed via the get_info command.
+
+    config GENERAL_VERSION
+        string "Firmware version"
+        default "0.0.1"
+        help
+            A firmware version string exposed via the get_info command.
+
+    config GENERAL_ADVERTISED_NAME
+        string "Advertised device name (UVC + mDNS)"
+        default "openiristracker"
+        help
+            Human-readable device name advertised uniformly across interfaces.
+            Used as the default mDNS hostname and (indirectly) the UVC USB
+            device name via get_uvc_device_name(). Users can still override
+            the runtime hostname through preferences.
+
+endmenu
+
+menu "OpenIris: Camera Configuration"
+
+    config CAMERA_USB_XCLK_FREQ
+        int "USB XCLK frequency (Hz)"
+        default 10000000 # should be set in individual board config 
+        range 1 24000000
+        help
+            USB XCLK frequency in Hz.
+
+    config CAMERA_WIFI_XCLK_FREQ
+        int "WIFI XCLK frequency (Hz)"
+        default 16500000
+        range 1 24000000
+        help
+            WIFI XCLK frequency in Hz.
+
+endmenu
+
+menu "OpenIris: WiFi Configuration"
+    # mDNS hostname now derives from GENERAL_ADVERTISED_NAME (no separate Kconfig)
+
+    config WIFI_SSID
+        string "WiFi network name (SSID)"
+        default ""
+
+    config WIFI_BSSID
+        string "WiFi network MAC Address (BSSID), completely optional, used in special cases"
+        default ""
+
+    config WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+
+    config WIFI_AP_SSID
+        string "Access Point WiFi network name (SSID)"
+        default "EyeTrackVR"
+
+    config WIFI_AP_PASSWORD
+        string "Access Point WiFi password"
+        default "12345678"
+
+endmenu
+
+menu "OpenIris: Serial Communication Settings"
+    config UART_PORT_NUMBER
+        int "UART Port number"
+        default 0
+        range 0 4
+        help
+            The UART port to use for communication
+
+    config UART_RX_PIN
+        int "UART RX PIN number"
+        default -1
+        help
+            The UART RX pin to use for communication. If set to -1 we won't override it. It will be treated as NO_CHANGE
+
+    config UART_TX_PIN
+        int "UART TX PIN number"
+        default -1
+        help
+            The UART TX pin to use for communication. If set to -1 we won't override it. It will be treated as NO_CHANGE
+
+endmenu
+
+menu "OpenIris: LED Configuration"
+
+    config LED_DEBUG_ENABLE
+        bool "Enable debug/status LED"
+        default y
+        help
+            When disabled the firmware will not drive the dedicated debug/status GPIO.
+            Useful on boards without a discrete status LED. Error/state patterns can
+            optionally be mirrored onto the external IR LED if LED_EXTERNAL_AS_DEBUG is set.
+
+    config LED_DEBUG_GPIO
+        int "Debug LED GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 8
+        help
+            GPIO number (IOxx) used to drive an onboard debug/status LED.
+            Some GPIOs are reserved for other functions (e.g. flash) and cannot be used.
+
+    config LED_EXTERNAL_GPIO
+        int "GPIO pin controlling external LEDs"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 1
+        help
+            GPIO number connected to the control line of the external IR LEDs.
+
+    config LED_EXTERNAL_CONTROL
+        bool "Board supports external IR LED control"
+        default false
+        help
+            Enable this if your board can control external IR LEDs.
+
+    config LED_EXTERNAL_AS_DEBUG
+        bool "Mirror error pattern on external LED"
+        depends on LED_EXTERNAL_CONTROL
+        default n
+        help
+            When enabled and an error LED pattern is active, the external IR LED PWM output
+            will blink (0% / 50% duty) to replicate the debug/status LED pattern. If
+            LED_DEBUG_ENABLE is disabled this provides visual error feedback using only
+            the external LED. Normal configured PWM brightness is restored when leaving
+            the error pattern.
+
+    config LED_EXTERNAL_PWM_FREQ
+        int "External LED PWM frequency (Hz)"
+        default 5000
+        range 1 40000
+        depends on LED_EXTERNAL_CONTROL
+        help
+            Frequency of the PWM signal driving the external IR LEDs.
+
+    config LED_EXTERNAL_PWM_DUTY_CYCLE
+        int "External LED PWM duty cycle (%)"
+        default 50
+        range 0 100
+        depends on LED_EXTERNAL_CONTROL
+        help
+            Duty cycle of the PWM signal for external IR LEDs, in percent.
+            0 means always off, 100 means always on.
+
+endmenu
+
+menu "OpenIris: Monitoring"
+
+    config MONITORING_LED_CURRENT
+        bool "Enable LED current monitoring"
+        default y
+        help
+            Enable sampling LED current via ADC and report it over commands.
+
+    config MONITORING_LED_ADC_GPIO
+        int "ADC GPIO for LED current sense"
+        depends on MONITORING_LED_CURRENT
+        range 0 48
+        default 3
+        help
+            GPIO connected to the current sense input. On ESP32-S3 ADC1 channels
+            0..9 map to GPIO1..10; On ESP32 ADC1 channels 0..3 map to GPIO36..39,
+            channels 4..7 map to GPIO32..35; adjust if your board uses a different pin.
+
+    config MONITORING_LED_GAIN
+        int "Analog front-end gain/divider"
+        depends on MONITORING_LED_CURRENT
+        range 1 1024
+        default 11
+        help
+            Divider or amplifier gain between shunt and ADC. The measured mV are divided by this value.
+
+    config MONITORING_LED_SHUNT_MILLIOHM
+        int "Shunt resistance (milli-ohms)"
+        depends on MONITORING_LED_CURRENT
+        range 1 1000000
+        default 22000
+        help
+            Shunt resistor value in milli-ohms. Current[mA] = 1000 * Vshunt[mV] / R[mΩ].
+
+    config MONITORING_LED_SAMPLES
+        int "Filter window size (samples)"
+        depends on MONITORING_LED_CURRENT
+        range 1 200
+        default 10
+        help
+            Moving-average window length for voltage filtering.
+
+    config MONITORING_LED_INTERVAL_MS
+        int "Sampling interval (ms)"
+        depends on MONITORING_LED_CURRENT
+        range 10 60000
+        default 500
+        help
+            Period between samples when background monitoring is active.
+
+    config MONITORING_BATTERY_ENABLE
+        bool "Enable battery voltage monitoring"
+        default n
+        help
+            Enables an ADC-based readout of the lithium battery voltage so the software
+            can report remaining charge in commands or REST endpoints.
+
+    config MONITORING_BATTERY_ADC_GPIO
+        int "ADC GPIO for battery voltage"
+        depends on MONITORING_BATTERY_ENABLE
+        range 0 48
+        default 1
+        help
+            GPIO that is wired to the battery sense divider. On ESP32-S3 ADC1 channels
+            0..9 map to GPIO1..10; On ESP32 ADC1 channels 0..3 map to GPIO36..39;
+            channels 4..7 map to GPIO32..35; adjust if your board uses a different pin.
+
+    config MONITORING_BATTERY_DIVIDER_R_TOP_OHM
+        int "Battery divider top resistor (ohms)"
+        depends on MONITORING_BATTERY_ENABLE
+        range 1 10000000
+        default 10000
+        help
+            The resistor from battery positive to ADC input in the voltage divider.
+            Set together with MONITORING_BATTERY_DIVIDER_R_BOTTOM_OHM to match your
+            board's sense network. Effective scale = 1 + R_top / R_bottom.
+
+    config MONITORING_BATTERY_DIVIDER_R_BOTTOM_OHM
+        int "Battery divider bottom resistor (ohms)"
+        depends on MONITORING_BATTERY_ENABLE
+        range 1 10000000
+        default 10000
+        help
+            The resistor from ADC input to ground in the voltage divider. For a 1:1
+            divider with 10k/10k, leave the defaults (10 kΩ each).
+
+    config MONITORING_BATTERY_SAMPLES
+        int "Battery filter window size (samples)"
+        depends on MONITORING_BATTERY_ENABLE
+        range 1 200
+        default 10
+        help
+            Moving-average window length for battery voltage filtering.
+
+    config MONITORING_BATTERY_INTERVAL_MS
+        int "Battery sampling interval (ms)"
+        depends on MONITORING_BATTERY_ENABLE
+        range 10 60000
+        default 1000
+        help
+            Period between background battery voltage samples.
+
+endmenu

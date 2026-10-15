@@ -1,0 +1,29 @@
+#pragma once
+#ifndef WIFI_SCANNER_HPP
+#define WIFI_SCANNER_HPP
+
+#include <string>
+#include <vector>
+#include "esp_log.h"
+#include "esp_wifi.h"
+
+struct WiFiNetwork
+{
+    std::string ssid;
+    uint8_t channel;
+    int8_t rssi;
+    uint8_t mac[6];
+    wifi_auth_mode_t auth_mode;
+};
+
+class WiFiScanner
+{
+   public:
+    WiFiScanner();
+    std::vector<WiFiNetwork> scanNetworks(int timeout_ms = 15000);
+
+   private:
+    std::vector<WiFiNetwork> networks;
+};
+
+#endif
