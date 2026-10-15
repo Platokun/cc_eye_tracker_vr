@@ -121,9 +121,11 @@ void WiFiManager::SetCredentials(const char* ssid, const std::vector<uint8_t> bs
     _wifi_cfg.sta.threshold.rssi = -127;                   // Accept any signal strength
     _wifi_cfg.sta.sae_pwe_h2e = WPA3_SAE_PWE_UNSPECIFIED;  // Let driver decide SAE mode
 
-    // Log what we're trying to connect to with detailed debugging
+    // Log what we're trying to connect to. Never log the password itself: the
+    // UART0 console is the only runtime console on this build and it is not
+    // access controlled.
     ESP_LOGI(WIFI_MANAGER_TAG, "Setting credentials for SSID: '%s' (length: %d)", ssid, (int)strlen(ssid));
-    ESP_LOGI(WIFI_MANAGER_TAG, "Password: '%s' (length: %d)", password, (int)strlen(password));
+    ESP_LOGI(WIFI_MANAGER_TAG, "Password: %s (length: %d)", password[0] ? "<set>" : "<empty>", (int)strlen(password));
     ESP_LOGI(WIFI_MANAGER_TAG, "Auth mode: %d, PMF capable: %d", _wifi_cfg.sta.threshold.authmode, _wifi_cfg.sta.pmf_cfg.capable);
 }
 

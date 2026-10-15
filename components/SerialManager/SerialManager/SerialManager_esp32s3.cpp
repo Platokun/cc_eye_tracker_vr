@@ -2,23 +2,48 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "esp_vfs_usb_serial_jtag.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "main_globals.hpp"
 
 #include "tusb.h"
 
+// ---------------------------------------------------------------------------
+// The ESP32-S3 has a single USB PHY on GPIO19/GPIO20 (the one USB-C connector).
+// It is routed to either the USB-Serial-JTAG controller or the USB-OTG
+// controller, never both.
+//
+// When CAMERA_INPUT_USB_UVC is set, that port is the USB *host* bus for the
+// camera, so the USB-Serial-JTAG driver must never be installed: doing so
+// re-configures the shared FSLS PHY (USB_SERIAL_JTAG.conf0.usb_pad_enable)
+// underneath the running USB host stack. Upstream OpenIris uninstalls this
+// driver before handing the port to USB, which is what this guard makes
+// unnecessary by simply not installing it.
+//
+// This costs nothing on such a build: the console is UART0, and the USB
+// port never enumerates as a serial device anyway.
+// ---------------------------------------------------------------------------
+#if CONFIG_CAMERA_INPUT_USB_UVC || defined(CONFIG_USE_UART_FOR_COMMUNICATION)
+#define SERIAL_MANAGER_USB_JTAG_DISABLED 1
+#else
+#define SERIAL_MANAGER_USB_JTAG_DISABLED 0
+#endif
+
 void SerialManager::setup()
 {
-#ifndef CONFIG_USE_UART_FOR_COMMUNICATION
+#if !SERIAL_MANAGER_USB_JTAG_DISABLED
     usb_serial_jtag_driver_config_t usb_serial_jtag_config;
     usb_serial_jtag_config.rx_buffer_size = BUF_SIZE;
     usb_serial_jtag_config.tx_buffer_size = BUF_SIZE;
     usb_serial_jtag_driver_install(&usb_serial_jtag_config);
+#else
+    ESP_LOGI("[SERIAL]", "USB-Serial-JTAG left alone: the USB port belongs to the camera host");
 #endif
 }
 
 void usb_serial_jtag_write_bytes_chunked(const char* data, size_t len, size_t timeout)
 {
-#ifndef CONFIG_USE_UART_FOR_COMMUNICATION
+#if !SERIAL_MANAGER_USB_JTAG_DISABLED
     while (len > 0)
     {
         auto to_write = len > BUF_SIZE ? BUF_SIZE : len;
@@ -26,11 +51,21 @@ void usb_serial_jtag_write_bytes_chunked(const char* data, size_t len, size_t ti
         data += written;
         len -= written;
     }
+#else
+    (void)data;
+    (void)len;
+    (void)timeout;
 #endif
 }
 
 void SerialManager::try_receive()
 {
+#if SERIAL_MANAGER_USB_JTAG_DISABLED
+    // No USB serial command channel on this build. Block instead of spinning on
+    // a driver that was deliberately never installed.
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return;
+#else
     static auto current_position = 0;
     int len = usb_serial_jtag_read_bytes(this->temp_data, 256, 1000 / 20);
 
@@ -64,10 +99,14 @@ void SerialManager::try_receive()
             usb_serial_jtag_write_bytes_chunked(resultMessage.c_str(), resultMessage.length(), 1000 / 20);
         }
     }
+#endif  // SERIAL_MANAGER_USB_JTAG_DISABLED
 }
 
 void SerialManager::shutdown()
 {
+#if SERIAL_MANAGER_USB_JTAG_DISABLED
+    ESP_LOGI("[SERIAL]", "No USB-Serial-JTAG driver to uninstall");
+#else
     // Uninstall the USB Serial JTAG driver to free the internal USB for TinyUSB.
     esp_err_t err = usb_serial_jtag_driver_uninstall();
     if (err == ESP_OK)
@@ -78,11 +117,12 @@ void SerialManager::shutdown()
     {
         ESP_LOGW("[SERIAL]", "usb_serial_jtag_driver_uninstall returned %s", esp_err_to_name(err));
     }
+#endif
 }
 
 void HandleCDCSerialManagerTask(void* pvParameters)
 {
-#ifndef CONFIG_USE_UART_FOR_COMMUNICATION
+#if !SERIAL_MANAGER_USB_JTAG_DISABLED
     auto const commandManager = static_cast<CommandManager*>(pvParameters);
     static char buffer[BUF_SIZE];
     auto idx = 0;

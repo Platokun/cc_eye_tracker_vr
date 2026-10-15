@@ -35,14 +35,17 @@ struct DeviceMode_t : BaseConfigModel
 
     void load()
     {
-        // Default mode can be controlled via sdkconfig:
-        // - If CONFIG_START_IN_UVC_MODE is enabled, default to UVC
-        // - Otherwise default to SETUP
-        int default_mode =
+        // Default mode can be controlled via sdkconfig, in this order of precedence:
+        // - CONFIG_START_IN_UVC_MODE  -> UVC
+        // - CONFIG_START_IN_WIFI_MODE -> Wi-Fi (joins/starts a network and streams immediately,
+        //                                     no host command needed first)
+        // - otherwise                 -> SETUP
 #if CONFIG_START_IN_UVC_MODE
-            static_cast<int>(StreamingMode::UVC);
+        int default_mode = static_cast<int>(StreamingMode::UVC);
+#elif CONFIG_START_IN_WIFI_MODE
+        int default_mode = static_cast<int>(StreamingMode::WIFI);
 #else
-            static_cast<int>(StreamingMode::SETUP);
+        int default_mode = static_cast<int>(StreamingMode::SETUP);
 #endif
 
         int stored_mode = this->pref->getInt("mode", default_mode);

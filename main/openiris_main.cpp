@@ -283,10 +283,20 @@ extern "C" void app_main(void)
 
     cameraHandler->setupCamera();
 
+    // The USB-Serial-JTAG controller shares the ESP32-S3's single USB PHY (GPIO19/20,
+    // the one USB-C connector) with the USB-OTG controller. When the camera owns that
+    // port, installing the USB serial driver would reconfigure the shared PHY underneath
+    // the running USB host stack, so the serial command channel is left off entirely.
+    // Commands are served over the Wi-Fi REST API (port 81) instead, and the console is
+    // UART0 (GPIO43/44) either way - there was never a USB serial port on this build.
+#if CONFIG_CAMERA_INPUT_USB_UVC
+    ESP_LOGI("[MAIN]", "USB camera input active - USB serial command channel disabled, USB PHY reserved for the camera host");
+#else
     // let's keep the serial manager running for the duration of the setup
     // we'll clean it up later if need be
     serialManager->setup();
     xTaskCreate(HandleSerialManagerTask, "HandleSerialManagerTask", 1024 * 6, serialManager, 1, &serialManagerHandle);
+#endif
 
     StreamingMode mode = deviceConfig->getDeviceMode();
     if (mode == StreamingMode::UVC)

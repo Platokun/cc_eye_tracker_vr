@@ -16,6 +16,22 @@ menu "OpenIris: General Configuration"
             waiting for a user choice or commands. This option does NOT compile UVC support in;
             it only changes the initial preference used when no saved mode exists.
 
+    config START_IN_WIFI_MODE
+        bool "Default initial streaming mode = Wi-Fi"
+        default false
+        depends on GENERAL_ENABLE_WIRELESS
+        help
+            Sets the power-on default streaming mode (before any user preference is stored)
+            to Wi-Fi. Ignored when START_IN_UVC_MODE is enabled, which takes precedence.
+
+            Use this when the device should be usable over the network without first being
+            told what to do by the eye-tracking host: on boot it joins the configured network
+            (or raises its fallback access point), starts mDNS and starts the MJPEG stream
+            server on port 80, exactly as if the 'switch_mode wifi' command had been sent.
+
+            This is the default for the xiao_esp32s3_usb_cam board, where the USB port is
+            occupied by the camera and there is no USB serial console to configure it with.
+
     config GENERAL_INCLUDE_UVC_MODE
         bool "Include UVC (USB Video Class) support"
         default false

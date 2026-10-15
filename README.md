@@ -1,325 +1,181 @@
-| Supported Targets | ESP32-S3 · Project Babble · Venti · FaceFocusVR · ESP32CAM · ESP32-AIThinker · ESP32-M5Stack · ESP-EYE · Wroom s3 N8R2 · Wroom s3 QIO N8R2 · Wroom s3 N8R8 · WROVER|
-| ----------------- | --------------------------------------- |
+# cc_eye_tracker_vr
 
-## OpenIris-ESPIDF
+Firmware for a **Seeed Studio XIAO ESP32S3** eye tracker that takes video from a **USB (UVC)
+camera on the USB-C port** and streams it to the eye-tracking host **over Wi-Fi**.
 
-Firmware and tools for OpenIris — Wi‑Fi, UVC streaming, and a Python setup CLI.
+This repository is built on [EyeTrackVR/OpenIris-ESPIDF](https://github.com/EyeTrackVR/OpenIris-ESPIDF)
+(ESP-IDF, not Arduino/PlatformIO) with a new USB host camera backend.
 
----
-
-## What’s inside
-
-- ESP‑IDF firmware (C/C++) with modules for Camera, Wi‑Fi, UVC, REST/Serial commands, and more
-- Python tools for setup over USB serial:
-  - `tools/switchBoardType.py` — choose a board profile (builds the right sdkconfig)
-  - `tools/setup_openiris.py` — interactive CLI for Wi‑Fi, MDNS/Name, Mode, LED PWM, Logs, and a Settings Summary
-- Composite USB (UVC + CDC) when UVC mode is enabled (`GENERAL_INCLUDE_UVC_MODE`) for simultaneous video streaming and command channel
-- LED current monitoring (if enabled via `MONITORING_LED_CURRENT`) with filtered mA readings
-- Battery voltage monitoring (if enabled via `MONITORING_BATTERY_ENABLE`) with Li-ion SOC percentage calculation
-- Configurable debug LED + external IR LED control with optional error mirroring (`LED_DEBUG_ENABLE`, `LED_EXTERNAL_AS_DEBUG`)
-- Auto‑discovered per‑board configuration overlays under `boards/`
-- Command framework (JSON over serial / CDC / REST) for mode switching, Wi‑Fi config, OTA credentials, LED brightness, info & monitoring
-- Single source advertised name (`CONFIG_GENERAL_ADVERTISED_NAME`) used for both UVC device name and mDNS hostname (unless overridden at runtime)
+**Start here: [`START_HERE.md`](START_HERE.md)** — flashing, power/wiring, first boot, Wi-Fi.
+Verification status: [`VALIDATION.md`](VALIDATION.md).
 
 ---
 
-## First-time setup on Windows (VS Code + ESP‑IDF extension)
+## At a glance
 
-If you’re starting fresh on Windows, this workflow is smooth and reliable:
+| | |
+|---|---|
+| Board profile | `boards/seed_studio/xiao_esp32s3_usb_cam` |
+| Camera input | USB Video Class (UVC) host on GPIO19/20 → the USB-C connector |
+| Video output | MJPEG over HTTP (port 80), plus the REST API on port 81 |
+| Console | UART0 — GPIO43 TX / GPIO44 RX, 115200 |
+| Default streaming mode | Wi-Fi, so the tracker is reachable without any host command |
+| Toolchain | ESP-IDF **v5.4.2**, target `esp32s3` |
 
-1. Install tooling
+---
 
-- Git: https://git-scm.com/downloads/win
-- Visual Studio Code: https://code.visualstudio.com/
+## Repository layout
 
-2. Get the source code
-
-- Create a folder where you want the repo (e.g., `D:\OpenIris-ESPIDF\`). In File Explorer, right‑click the folder and choose “Open in Terminal”.
-- Clone and open in VS Code:
-
-```cmd
-git clone https://github.com/lorow/OpenIris-ESPIDF.git
-cd OpenIris-ESPIDF
-code .
+```
+START_HERE.md                  user-facing setup guide (read this first)
+VALIDATION.md                  what was actually built and verified, and how
+user_board.nzk.config          the one file you edit: Wi-Fi, fallback AP, device name
+build_and_flash.sh / .bat      build the firmware (and optionally flash it)
+boards/seed_studio/
+  xiao_esp32s3_usb_cam         the USB-camera board profile
+  xiao_esp32s3                 the stock DVP-camera profile (kept for switching back)
+components/
+  UsbUvcCamera/                USB host + uvc_host wrapper, frames as camera_fb_t
+  CameraManager/               picks the DVP sensor or the USB camera
+  StreamServer/                MJPEG HTTP stream (Wi-Fi)
+  UVCStream/                   USB-webcam output path (compiled out on this board)
+  SerialManager/               serial command channel (deliberately inert on this board)
+  ...
+flash/                         PlatformIO project that only *flashes* the prebuilt image
+docs/                          USB camera + flashing write-ups
+tools/                         apply_user_config.py, board switcher, setup CLI
+managed_components/            vendored esp32-camera, usb_host_uvc, tinyusb, mdns, ...
 ```
 
-3. Install the ESP‑IDF VS Code extension
+---
 
-- In VS Code, open the Extensions tab and install: https://marketplace.visualstudio.com/items?itemName=espressif.esp-idf-extension
+## Which code path is active
 
-4. Set the default terminal profile to Command Prompt
+`CONFIG_CAMERA_INPUT_USB_UVC=y` (set in the board profile) switches the firmware to the USB
+camera. Everything downstream is unchanged:
 
-- Press Ctrl+Shift+P → search “Terminal: Select Default Profile” → choose “Command Prompt”.
-- Restart VS Code from its normal shortcut (not from Git Bash). This avoids running ESP‑IDF in the wrong shell.
+```
+USB camera ─▶ usb_host_uvc ─▶ UsbUvcCamera (camera_fb_t)
+                                      │
+                         CameraManager::getFrame()
+                                      │
+                            StreamServer (port 80) ─▶ HTTP MJPEG ─▶ EyeTrackVR host
+```
 
-5. Configure ESP‑IDF in the extension
+Because the ESP32-S3 has a single USB PHY, on this board:
 
-- On first launch, the extension may prompt to install ESP‑IDF and tools — follow the steps. It can take a while.
-- If you see the extension’s home page instead, click “Configure extension”, pick “EXPRESS”, choose “GitHub” as the server and version “v5.4.2”.
-- Then open the ESP‑IDF Explorer tab and click “Open ESP‑IDF Terminal”. We’ll use that for builds.
-
-After this, you’re ready for the Quick start below.
+* `CONFIG_GENERAL_INCLUDE_UVC_MODE` is forced off (Kconfig `depends on !CAMERA_INPUT_USB_UVC`),
+  so the device can never be a USB webcam at the same time;
+* the USB-Serial-JTAG console is disabled and the console moves to UART0;
+* the firmware does **not** install the USB-Serial-JTAG driver at runtime, leaving the PHY
+  entirely to the USB host controller;
+* re-flashing always means: hold `BOOT`, replug USB-C, release `BOOT`.
 
 ---
 
-## Quick start
+## Wi-Fi behaviour
 
-### 1) Grab UV.
+`CONFIG_START_IN_WIFI_MODE=y` is set in this board profile, so the tracker boots into Wi-Fi
+streaming mode instead of waiting in `SETUP` for a host command that would have to arrive over
+a serial port that no longer exists.
 
-We're using UV to manage our tools, grab and install it from [here](https://docs.astral.sh/uv/getting-started/installation/).
+On boot it tries, in order: the Wi-Fi compiled in from `user_board.nzk.config` → networks
+stored through the app/REST API → its own fallback access point (`EyeTrackVR` / `12345678`).
+Then mDNS starts and the stream server starts on port 80.
 
-Once installed, you'll be able to just run the commands below and UV will take care of setting up everything.
+Reachable at `http://<DEVICE_NAME>.local` (default `http://cc_eyetracker.local/`, or
+`http://192.168.4.1/` when running as an access point).
 
-### 1) Pick your board (loads the default configuration)
+---
 
-Boards are auto‑discovered from the `boards/` directory. First list them, then pick one:
+## Configuration
 
-Windows (cmd):
+### Compile-time — `user_board.nzk.config`
 
-```cmd
-uv run .\tools\switchBoardType.py --list
-uv run .\tools\switchBoardType.py --board seed_studio_xiao_esp32s3 --diff
+```
+WIFI_SSID=          # your home network (blank = access point only)
+WIFI_PASSWORD=
+AP_SSID=EyeTrackVR  # fallback access point
+AP_PASSWORD=12345678
+DEVICE_NAME=cc_eyetracker
 ```
 
-macOS/Linux (bash):
+`build_and_flash.sh` / `.bat` convert this into `boards/generated/user_config` and append it
+to `SDKCONFIG_DEFAULTS`. Validate without writing anything:
 
 ```bash
-uv run ./tools/switchBoardType.py --list
-uv run ./tools/switchBoardType.py --board seed_studio_xiao_esp32s3 --diff
+python tools/apply_user_config.py --check
 ```
 
-Notes:
+### Run-time — REST API on port 81
 
-- Use `--list` to see all detected board keys.
-- Board key = relative path under `boards/` with `/` replaced by `_` (and duplicate tail segments collapsed, e.g. `project_babble/project_babble` -> `project_babble`).
-- `--diff` shows what will change vs the current `sdkconfig`.
-- You can also pass partial or path‑like inputs (e.g. `facefocusvr/eye_L`), the tool normalizes them.
-- ESP32‑S3 WROOM‑1 (e.g. Freenove) users: pick the board by the marking on your module. **N8R2** (2MB quad PSRAM) → `wrooms3N8R2` or `wrooms3QION8R2`; **N8R8** (8MB octal PSRAM) → `wrooms3N8R8`. Flashing the wrong variant aborts at boot with `quad_psram: PSRAM ID read error` / `Failed to init external RAM!`.
+Each command has its own endpoint; the JSON body is the command payload.
 
-### 2) Build & flash
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/set/wifi/` | store a network: `{"name","ssid","password","channel","power"}` |
+| `POST` | `/api/set/config/save/` | persist the current config |
+| `POST` | `/api/set/wifi/connect/` | connect now |
+| `PATCH` | `/api/update/device/mode/` | switch streaming mode (`uvc` / `wifi` / `setup`) |
+| `GET` | `/api/get/who_am_i/` | board id and firmware version |
+| `GET` | `/api/ping/` | liveness |
+| `POST` | `/api/reboot/device/` | restart |
 
-- Set the target (e.g., ESP32‑S3).
-- Build, flash, and open the serial monitor.
-- (Optional) For UVC mode ensure `GENERAL_INCLUDE_UVC_MODE=y`. If you want device to boot directly into UVC: also set `START_IN_UVC_MODE=y`.
-- Disable Wi‑Fi services for pure wired builds: `GENERAL_ENABLE_WIRELESS=n`.
+### Camera tuning — `menuconfig`
 
-### 3) Use the Python setup CLI (recommended)
+`OpenIris: USB Camera (UVC host) Configuration`: `CAMERA_UVC_VID`/`PID`,
+`CAMERA_UVC_FORMAT_MJPEG`/`YUY2`, `CAMERA_UVC_WIDTH`/`HEIGHT`/`FPS`,
+`CAMERA_UVC_BUFFER_COUNT`, `CAMERA_UVC_URB_COUNT`, `CAMERA_UVC_JPEG_QUALITY`.
 
-Configure the device over USB serial.
+The camera's advertised modes are logged over UART on every connect; request one that is
+actually in that list or the driver falls back to the device default.
 
-Before you run it:
+---
 
-- If you still have the serial monitor open, close it (the port must be free).
+## LED status patterns
 
-Then run:
+The on-board LED (GPIO21, `LED_DEBUG_ENABLE=y`) mirrors device state.
 
-Windows (cmd):
+| State | Pattern | Meaning |
+|---|---|---|
+| idle | off | heartbeat window, nothing running |
+| streaming | steady on | streaming active (Wi-Fi) |
+| stopped | steady off | streaming intentionally stopped |
+| camera error | 300/300, 300/700 | camera init/runtime failure |
+| Wi-Fi connecting | 400/400 | associating / DHCP pending |
+| Wi-Fi connected | 150/150 ×3, then 600 off | connected |
+| Wi-Fi error | 200/100, 500/300 | auth timeout / no AP |
 
-```cmd
-uv run .\tools\setup_openiris.py --port COMxx
-```
+---
 
-macOS/Linux (bash):
+## Building
 
 ```bash
-uv run ./tools/setup_openiris.py --port /dev/tty<port>
+./build_and_flash.sh                       # build only
+./build_and_flash.sh --flash /dev/ttyACM0  # build and flash
 ```
 
-Examples:
+Requires ESP-IDF v5.4.2 (`idf.py` on `PATH`, or at `$IDF_PATH`, `~/esp/esp-idf`,
+`~/esp-idf`, `/opt/esp-idf`). The script regenerates `sdkconfig` from the board profile,
+builds, and merges everything into a single image flashable at offset `0x0`.
 
-- Windows: `uv run .\tools\setup_openiris.py --port COM69`
-- macOS: `uv run ./tools/setup_openiris.py --port /dev/ttyACM0`
-- Linux: `uv run ./tools/setup_openiris.py --port /dev/ttyACM0`
+Manual equivalent:
 
-What the CLI can do:
+```bash
+export SDKCONFIG_DEFAULTS="boards/sdkconfig.base_defaults;boards/seed_studio/xiao_esp32s3_usb_cam;boards/generated/user_config"
+rm -f sdkconfig sdkconfig.old
+idf.py set-target esp32s3
+idf.py build
+```
 
-- Wi‑Fi menu: automatic (scan → pick → password → connect → wait for IP) or manual (scan, show, configure, connect, status)
-- Set MDNS/Device name (also used for the UVC device name)
-- Switch mode (Wi‑Fi / UVC / Setup)
-- Adjust LED PWM
-- Show a Settings Summary (MAC, Wi‑Fi status, mode, PWM, …)
-- View logs
+> Do **not** run `rm -rf build` on a network filesystem and then start a build in the same
+> directory — NFS deletes lazily and can wipe the new build tree underneath ninja. Delete
+> while nothing is building, or build into a fresh directory with `idf.py -B <dir>`.
 
 ---
 
-## Serial number & MAC
+## Licence / credits
 
-- Internally, the serial number is derived from the Wi‑Fi MAC address.
-- The CLI displays the MAC by default (clearer); it’s the value used as the serial number.
-- The UVC device name is based on the MDNS hostname.
-
-## Advertised Name (UVC + mDNS)
-
-`CONFIG_GENERAL_ADVERTISED_NAME` (Kconfig) defines the base name announced over:
-
-- USB UVC descriptor (appears in OS camera list)
-- mDNS hostname / service name
-
-Runtime override: If the setup CLI (or a JSON command) provides a new device name, that value supersedes the compile-time default until next flash/reset of settings.
-
----
-
-## Common workflows
-
-- Fast Wi‑Fi setup: in the CLI, go to “Wi‑Fi settings” → “Automatic setup”, then check “status”.
-- Change name/MDNS: set the device name in the CLI, then replug USB — UVC will show the new name.
-- Adjust brightness/LED: set LED PWM in the CLI.
-- Switch to UVC mode over commands (CDC/serial):
-  `{"commands":[{"command":"switch_mode","data":{"mode":"uvc"}}]}` then reboot.
-- Read filtered LED current (if enabled):
-  `{"commands":[{"command":"get_led_current"}]}`
-- Read battery status (if enabled):
-  `{"commands":[{"command":"get_battery_status"}]}`
-
----
-
-## Project layout (short)
-
-- `main/` — entry point
-- `components/` — modules (Camera, WiFi, UVC, CommandManager, …)
-- `tools/` — Python helper tools (board switch, setup CLI, scanner)
-- `tests/` - Hardware in the loop tests, with support for different boards and automatic skips if a board can't perform a given test
-  If you want to dig deeper: commands are mapped via the `CommandManager` under `components/CommandManager/...`.
-
----
-
-## Running Hardware In The Loop Tests
-
-In order to run the tests, you'll need to setup a couple of things:
-
-- copy the `.env.example` file in `/tests/` and rename it to `.env`. Then, open it and fill out the network details - SSID and Password.
-- plug in your board to your pc and wait for it to boot.
-- open the terminal (`ctrl/cmd + j` in VSC) and head over to `/tests/` directory.
-
-Once there, you can invoke the tests with `UV` like so:
-
-```cmd
-uv run pytest --board=<your board name> --connection=COM<the number your board connected to>
-```
-
-This will auto select every test we have, connect to your board automatically and have pytest skip tests that don't fit your board.
-For example, tests involving switching modes to UVC and testing commands over there are disabled for esp32 based boards as only esp32s3 can do it. Same goes for WiFi for FaceFocus Boards.
-
-If you see any fails, you can try rerunning them one by one with:
-
-```cmd
-uv run pytest --board=<your board name> --connection=COM<the number your board connected to> -k name_of_the_test
-```
-
-Or rerun every single failed test like so:
-
-```cmd
-uv run pytest --board=<your board name> --connection=COM<the number your board connected to> --lf
-```
-
-Sometimes tests will fail due to timeouts, this is normal.
-
-You should see the tests starting to go off, with any luck - all of them passing, your board should also start reacting to the changes - reboots, blinking lights etc are **expected** as we're performing hardware in the loop tests.
-
-### Warning:
-
-    After the testing session ends **WE WILL RESET THE BOARD**, any changes you've made yourself to it will be lost. This is done to ensure that the test we perform are unaffected by any changes done by said tests.
-    If we skipped that, tests involving adding fake networks would break some that rely on the board connecting to real ones in a timely manner, for example.
-    
-    There is currently no way to skip that behavior.
-
-## Troubleshooting
-
-### USB Composite (UVC + CDC)
-
-When UVC support is compiled in, the device enumerates as a composite USB device:
-
-- UVC interface: video streaming (JPEG frames)
-- CDC (virtual COM): command channel accepting newline‑terminated JSON objects
-
-Example newline‑terminated JSON commands over CDC (one per line):
-
-```
-{"commands":[{"command":"ping"}]}
-{"commands":[{"command":"get_who_am_i"}]}
-{"commands":[{"command":"switch_mode","data":{"mode":"wifi"}}]}
-```
-
-Chained commands in a single request (processed in order):
-
-```
-{"commands":[
-  {"command":"set_mdns","data":{"hostname":"tracker"}},
-  {"command":"set_wifi","data":{"name":"main","ssid":"your_network","password":"password","channel":0,"power":0}}
-]}
-```
-
-Responses are JSON blobs flushed immediately.
-
----
-
-### Monitoring (LED Current & Battery)
-
-**LED Current Monitoring**
-
-Enabled with `MONITORING_LED_CURRENT=y` plus shunt/gain settings. The task samples every `CONFIG_MONITORING_LED_INTERVAL_MS` ms and maintains a filtered moving average over `CONFIG_MONITORING_LED_SAMPLES` samples. Use `get_led_current` command to query.
-
-**Battery Monitoring**
-
-Enabled with `MONITORING_BATTERY_ENABLE=y`. Supports voltage divider configuration for measuring Li-ion/Li-Po battery voltage:
-
-| Kconfig | Description |
-|---------|-------------|
-| MONITORING_BATTERY_ADC_GPIO | GPIO pin connected to voltage divider output |
-| MONITORING_BATTERY_DIVIDER_R_TOP_OHM | Top resistor value (battery side) |
-| MONITORING_BATTERY_DIVIDER_R_BOTTOM_OHM | Bottom resistor value (GND side) |
-| MONITORING_BATTERY_INTERVAL_MS | Sampling interval in milliseconds |
-| MONITORING_BATTERY_SAMPLES | Moving average window size |
-
-The firmware includes a Li-ion discharge curve lookup table for SOC (State of Charge) percentage calculation with linear interpolation. Use `get_battery_status` command to query voltage (mV) and percentage (%).
-
-### Debug & External LED Configuration
-
-| Kconfig                     | Effect                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| LED_DEBUG_ENABLE            | Enables/disables discrete status LED GPIO init & drive                                              |
-| LED_EXTERNAL_CONTROL        | Enables PWM control for IR / external LED                                                           |
-| LED_EXTERNAL_PWM_DUTY_CYCLE | Default duty % applied at boot (0–100)                                                              |
-| LED_EXTERNAL_AS_DEBUG       | Mirrors only error patterns onto external LED (0%/50%) when debug LED absent or also for redundancy |
-
-### Board Profiles
-
-Each file under `boards/` overlays `sdkconfig.base_defaults`. The merge order: base → board file → (optional) dynamic Wi‑Fi overrides via `switchBoardType.py` flags. Duplicate trailing segment directories collapse to unique keys.
-
-- UVC doesn’t appear on the host?
-  - Switch mode to UVC via CLI tool, replug USB and wait 20s.
-
-### Adding a new board configuration
-
-1. Create a new config file under `boards/` (you can nest folders): for example `boards/my_family/my_variant`.
-2. Populate it with only the `CONFIG_...` lines that differ from the shared defaults. Shared baseline lives in `boards/sdkconfig.base_defaults` and is always merged first.
-3. The board key the script accepts will be the relative path with `/` turned into `_` (example: `boards/my_family/my_variant` -> `my_family_my_variant`).
-4. Run `uv run tools/switchBoardType.py --list` to verify it’s detected, then switch using `-b my_family_my_variant`.
-5. If you accidentally create two files that collapse to the same key the last one found wins—rename to keep keys unique.
-
-Tips:
-
-- Use `--diff` after adding a board to sanity‑check only the intended keys change.
-- For Wi‑Fi overrides on first flash: add none—pass `--ssid` / `--password` when switching if needed.
-
----
-
-## Troubleshooting
-
-### LED Status / Error Patterns
-
-The firmware uses a small set of LED patterns to indicate status and blocking errors. When `LED_DEBUG_ENABLE` is disabled and `LED_EXTERNAL_AS_DEBUG` is enabled the external IR LED mirrors ONLY error patterns (0%/50% duty). Non‑error patterns are not mirrored.
-
-| State                    | Visual                                                    | Category     | Timing Pattern (ms)    | Meaning                                                   |
-| ------------------------ | --------------------------------------------------------- | ------------ | ---------------------- | --------------------------------------------------------- |
-| LedStateNone             | ![idle](docs/led_patterns/idle.svg)                       | idle         | (off)                  | No activity / heartbeat window waiting                    |
-| LedStateStreaming        | ![stream](docs/led_patterns/streaming.svg)                | active       | steady on              | Streaming running (UVC or Wi‑Fi)                          |
-| LedStateStoppedStreaming | ![stopped](docs/led_patterns/stopped.svg)                 | inactive     | steady off             | Streaming intentionally stopped                           |
-| CameraError              | ![camera error](docs/led_patterns/camera_error.svg)       | error        | 300/300 300/700 (loop) | Camera init/runtime failure (check sensor, ribbon, power) |
-| WiFiStateConnecting      | ![wifi connecting](docs/led_patterns/wifi_connecting.svg) | transitional | 400/400 (loop)         | Wi‑Fi associating / DHCP pending                          |
-| WiFiStateConnected       | ![wifi connected](docs/led_patterns/wifi_connected.svg)   | notification | 150/150×3 then 600 off | Wi‑Fi connected successfully                              |
-| WiFiStateError           | ![wifi error](docs/led_patterns/wifi_error.svg)           | error        | 200/100 500/300 (loop) | Wi‑Fi failed (auth timeout or no AP)                      |
-
----
-
-Feedback, issues, and PRs are welcome.
+Based on [OpenIris](https://github.com/EyeTrackVR/OpenIris) and
+[OpenIris-ESPIDF](https://github.com/EyeTrackVR/OpenIris-ESPIDF) by the EyeTrackVR project.
+USB host camera backend added here. Bundled ESP-IDF components retain their own licences.

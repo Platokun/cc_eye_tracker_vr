@@ -6,7 +6,7 @@ sidebar, and also rewires PlatformIO's normal Upload command to write the same
 prebuilt image.
 
 Nothing is compiled here - the image is produced by build_and_flash.bat /
-build_and_flash.sh in the repository root.
+build_and_flash.sh in the repository root, and lands next to this folder.
 """
 
 Import("env")  # noqa: F821  (PlatformIO injects this)
@@ -23,63 +23,91 @@ def _firmware_path(env):
     return os.path.normpath(os.path.join(env.subst("$PROJECT_DIR"), FIRMWARE_REL))
 
 
-def _esptool_module_arg(env):
-    """Prefer the esptool bundled with the espressif32 platform."""
-    try:
-        pkg_dir = env.PioPlatform().get_package_dir("tool-esptoolpy")
-    except Exception:
-        pkg_dir = None
+def _esptool_cmd(env):
+    """Return a full command prefix that runs esptool.
 
-    if pkg_dir:
-        candidate = os.path.join(pkg_dir, "esptool.py")
-        if os.path.isfile(candidate):
-            return '"%s"' % candidate
+    Covers both packaging layouts platform-espressif32 has shipped:
 
-    return "-m esptool"
+      * ``tool-esptoolpy`` (esptool 4.x) -> ``esptool.py`` run by PlatformIO's
+        own Python interpreter, i.e. ``"<python>" "<esptool.py>"``.
+      * ``tool-esptool`` (esptool 5.x, standalone binary, no Python) ->
+        ``esptool`` / ``esptool.exe`` used on its own as an executable.
 
-
-def _build_command(env, port=None):
+    Last resort is the ``esptool`` Python module, which is only importable if
+    someone installed it into PlatformIO's virtualenv.
+    """
     python = env.subst("$PYTHONEXE")
-    esptool = _esptool_module_arg(env)
-    firmware = _firmware_path(env)
 
-    port = port or env.subst("$UPLOAD_PORT")
-    port_arg = '--port "%s"' % port if port and port != "auto" else ""
+    for package, names, needs_python in (
+        ("tool-esptoolpy", ("esptool.py", "esptool"), True),
+        ("tool-esptool", ("esptool.exe", "esptool"), False),
+    ):
+        try:
+            pkg_dir = env.PioPlatform().get_package_dir(package)
+        except Exception:
+            pkg_dir = None
+        if not pkg_dir:
+            continue
+        for name in names:
+            candidate = os.path.join(pkg_dir, name)
+            if os.path.isfile(candidate):
+                if needs_python:
+                    return '"%s" "%s"' % (python, candidate)
+                return '"%s"' % candidate
 
-    return '"%s" %s --chip esp32s3 %s --baud %s write_flash %s "%s"' % (
-        python,
-        esptool,
-        port_arg,
+    return '"%s" -m esptool' % python
+
+
+def _build_command(env):
+    """esptool write_flash for the merged image.
+
+    --port is deliberately omitted so esptool auto-detects the single serial
+    port - that is what makes this a one-click flasher.
+    """
+    return '%s --chip esp32s3 --baud %s write_flash %s "%s"' % (
+        _esptool_cmd(env),
         BAUD,
         FLASH_OFFSET,
-        firmware,
+        _firmware_path(env),
     )
 
 
-def _check_firmware(env):
-    path = _firmware_path(env)
-    if not os.path.isfile(path):
+def _check_firmware(env, firmware=None):
+    if firmware is None:
+        firmware = _firmware_path(env)
+    if not os.path.isfile(firmware):
         print("")
         print("ERROR: the firmware image was not found:")
-        print("   %s" % path)
+        print("   %s" % firmware)
         print("")
         print("Run build_and_flash.bat (or ./build_and_flash.sh) first.")
         print("")
-        return None
-    return path
+        return False
+    return True
 
 
 def flash_openiris(source, target, env):
-    if not _check_firmware(env):
+    """Custom target: write the prebuilt image at 0x0."""
+    firmware = _firmware_path(env)
+    if not _check_firmware(env, firmware):
         return
 
     print("")
     print("=" * 62)
     print(" Flashing cc_eye_tracker_vr")
     print("=" * 62)
-    print(" If this fails: unplug, hold BOOT, plug USB-C back in, release BOOT.")
+    print(" Board must already be in download mode:")
+    print("   hold BOOT, plug the USB-C cable into the PC, release BOOT.")
+    print(" The camera / OTG adapter must NOT be plugged in.")
     print("")
-    env.Execute(_build_command(env))
+
+    # env.Execute() runs the command and returns its exit status, but SCons
+    # does NOT fail the build because of it - PlatformIO would print
+    # [SUCCESS] even when esptool could not open a port. Propagate the failure
+    # so a failed flash is reported as FAILED.
+    status = env.Execute(_build_command(env))
+    if status:
+        env.Exit(status)
 
 
 # Single-click entry in the VS Code PlatformIO sidebar.
@@ -89,18 +117,11 @@ env.AddCustomTarget(  # noqa: F821
     actions=[flash_openiris],
     title="Flash cc_eye_tracker_vr firmware",
     description="Writes the prebuilt image at 0x0. Hold BOOT while plugging USB first.",
-    always_build=False,
 )
 
-# Make the normal Upload toolbar arrow do the same thing. UPLOADCMD must be a
-# command string; PlatformIO substitutes $UPLOAD_PORT at upload time.
+# Make the normal Upload toolbar arrow (and `pio run -t upload`) write the same
+# image. UPLOADCMD must be a command *string*, not a Python callable, so SCons
+# expands it when the upload action runs.
 env.Replace(  # noqa: F821
-    UPLOADCMD='"%s" %s --chip esp32s3 --port "$UPLOAD_PORT" --baud %s write_flash %s "%s"'
-    % (
-        env.subst("$PYTHONEXE"),
-        _esptool_module_arg(env),
-        BAUD,
-        FLASH_OFFSET,
-        _firmware_path(env),
-    )
+    UPLOADCMD=_build_command(env),
 )

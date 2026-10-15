@@ -57,6 +57,13 @@ CONFIG_CAMERA_UVC_URB_COUNT=4
 # CONFIG_GENERAL_INCLUDE_UVC_MODE is not set
 # CONFIG_START_IN_UVC_MODE is not set
 
+# There is no USB serial console while the camera owns the USB port, so the
+# device must come up already serving video over Wi-Fi instead of waiting in
+# SETUP mode for a command that could only arrive over a serial port that no
+# longer exists. WIFI mode = join WIFI_SSID (or raise the fallback AP) + mDNS +
+# MJPEG stream server on port 80, with no host software required first.
+CONFIG_START_IN_WIFI_MODE=y
+
 # USB-Serial-JTAG shares that same PHY, so it must be released as well.
 # Console falls back to UART0 (GPIO43/GPIO44). To re-flash: hold BOOT, replug.
 # CONFIG_USJ_ENABLE_USB_SERIAL_JTAG is not set

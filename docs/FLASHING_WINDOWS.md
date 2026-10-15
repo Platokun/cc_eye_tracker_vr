@@ -76,16 +76,21 @@ needs it, so **the board cannot be powered from that port any more**.
 | Camera | USB-C → **OTG adapter** → camera (USB-A) |
 | Power | **5 V + GND into the `5V` and `GND` pins** |
 
-A bare 3.7 V LiPo on the battery pads / VIN will **not** work: the camera needs 5 V, and on
-the XIAO the `5V` pin is tied to the USB-C VBUS pin. Feed **5 V from a power bank or a 5 V
-regulator** into the `5V` pin — that powers the board *and* back-feeds VBUS to the camera.
+A bare 3.7 V LiPo on the battery pads / VIN will **not** work: the XIAO has no boost
+converter, so with battery-only power there is **0 V on the `5V` pin** and the camera never
+powers up (the board itself boots fine). The camera needs 5 V, and on the XIAO the `5V` pin is
+tied directly to the USB-C VBUS pin.
 
-If you also want to plug a PC into the port while external 5 V is connected, put a Schottky
-diode in the external 5 V feed (anode to your supply, cathode to the `5V` pin).
+Feed **5 V from a power bank, or from a LiPo plus a 3.7 V→5 V boost module** into the `5V`
+pin — that powers the board *and* back-feeds VBUS to the camera.
 
-> Alternative: a **powered USB hub**. XIAO USB-C → hub upstream, camera → hub downstream.
-> The hub's PSU back-feeds 5 V to the XIAO. Works only if the hub actually back-powers its
-> upstream port — not all do.
+> ⚠️ **Put a Schottky diode in that feed** — anode to your supply, cathode to the `5V` pin.
+> Seeed requires it (the board does not have one), and it stops your supply from fighting USB
+> VBUS if a cable is ever plugged in. Any 1 A+ Schottky will do; it drops ~0.3–0.5 V.
+
+> Alternative: a **self-powered USB hub**. XIAO USB-C → hub upstream, camera → hub downstream.
+> The hub's PSU supplies VBUS, so nothing is injected into the `5V` pin. Works only if the hub
+> back-powers its upstream port — not all do.
 
 ---
 
@@ -94,14 +99,18 @@ diode in the external 5 V feed (anode to your supply, cathode to the `5V` pin).
 The serial setup CLI (`tools/setup_openiris.py`) is unusable over USB now, because the
 USB port is the camera bus and the console moved to UART0 (GPIO43/44).
 
-Instead, on first boot with no stored credentials the firmware raises its own access point:
+Instead, the firmware boots straight into Wi-Fi streaming mode. On first boot with no stored
+credentials it raises its own access point:
 
 * **SSID:** `EyeTrackVR`
 * **Password:** `12345678`
 
-Join that from a phone/laptop and configure the real Wi-Fi over the device's REST interface,
-or connect the tracker to your normal network and find it via mDNS
-(`openiristracker.local`).
+Join that from a phone/laptop and open **<http://cc_eyetracker.local/>** (or
+`http://192.168.4.1/`) — that URL *is* the live MJPEG stream, so if you can see it, the camera
+and the Wi-Fi path both work.
+
+To join your normal network either rebuild with your details in `user_board.nzk.config`, or
+use the device's REST interface on port 81 (the EyeTrackVR host app does this for you).
 
 ---
 
