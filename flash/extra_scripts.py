@@ -5,22 +5,39 @@ Adds a single-click "Flash cc_eye_tracker_vr firmware" entry to the PlatformIO
 sidebar, and also rewires PlatformIO's normal Upload command to write the same
 prebuilt image.
 
-Nothing is compiled here - the image is produced by build_and_flash.bat /
-build_and_flash.sh in the repository root, and lands next to this folder.
+Nothing is compiled here - the image is produced by build.sh / build.bat in the
+repository root and written to out/.
 """
 
 Import("env")  # noqa: F821  (PlatformIO injects this)
 
 import os
 
-# The merged image is written to the repository root, one level above this file.
-FIRMWARE_REL = os.path.join(os.pardir, "openiris_xiao_esp32s3_usb_cam_merged.bin")
+IMAGE_NAME = "openiris_xiao_esp32s3_usb_cam_merged.bin"
+
+# Where the merged image might be, relative to this project directory, in the
+# order we prefer them. The first one that exists wins, so the same script
+# works for the repository layout (out/ one level up) and for a standalone copy
+# of this folder that carries its own out/ directory.
+FIRMWARE_CANDIDATES = (
+    os.path.join(os.pardir, "out", IMAGE_NAME),   # repository layout
+    os.path.join("out", IMAGE_NAME),              # self-contained copy
+    os.path.join(os.pardir, IMAGE_NAME),          # older layout, repo root
+    IMAGE_NAME,                                   # loose next to platformio.ini
+)
+
 FLASH_OFFSET = "0x0"
 BAUD = "921600"
 
 
 def _firmware_path(env):
-    return os.path.normpath(os.path.join(env.subst("$PROJECT_DIR"), FIRMWARE_REL))
+    project_dir = env.subst("$PROJECT_DIR")
+    paths = [os.path.normpath(os.path.join(project_dir, rel)) for rel in FIRMWARE_CANDIDATES]
+    for path in paths:
+        if os.path.isfile(path):
+            return path
+    # Nothing found: return the preferred location so the error message is useful.
+    return paths[0]
 
 
 def _esptool_cmd(env):
@@ -72,24 +89,29 @@ def _build_command(env):
     )
 
 
-def _check_firmware(env, firmware=None):
-    if firmware is None:
-        firmware = _firmware_path(env)
-    if not os.path.isfile(firmware):
-        print("")
-        print("ERROR: the firmware image was not found:")
-        print("   %s" % firmware)
-        print("")
-        print("Run build_and_flash.bat (or ./build_and_flash.sh) first.")
-        print("")
-        return False
-    return True
+def _check_firmware(env):
+    firmware = _firmware_path(env)
+    if os.path.isfile(firmware):
+        return True
+
+    project_dir = env.subst("$PROJECT_DIR")
+    print("")
+    print("ERROR: the firmware image was not found.")
+    print("")
+    print("Looked for:")
+    for rel in FIRMWARE_CANDIDATES:
+        print("   %s" % os.path.normpath(os.path.join(project_dir, rel)))
+    print("")
+    print("Build it first: ./build.sh  (Linux/macOS)  or  build.bat  (Windows)")
+    print("")
+    return False
 
 
 def flash_openiris(source, target, env):
     """Custom target: write the prebuilt image at 0x0."""
-    firmware = _firmware_path(env)
-    if not _check_firmware(env, firmware):
+    if not _check_firmware(env):
+        # Nothing to flash is a failure, not a success.
+        env.Exit(1)
         return
 
     print("")

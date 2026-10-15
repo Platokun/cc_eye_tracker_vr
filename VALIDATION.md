@@ -24,7 +24,8 @@ something or reading the source.
 
 ## 1. The firmware builds
 
-Ran from a clean state with the repository's own board profile:
+**Result:** `./build.sh` exit 0 (see §10 for the run through the shipped script).
+Earlier, from a clean state with the repository's own board profile:
 
 ```bash
 python tools/apply_user_config.py
@@ -33,12 +34,15 @@ idf.py -B /tmp/ccbuild2 set-target esp32s3
 idf.py -B /tmp/ccbuild2 build
 ```
 
-**Result:** `idf.py build` exit 0, **0 errors**, 1165/1165 targets.
-App image `0x158d80` bytes, 29 % of the 0x1e0000 app partition free.
-Merged image written: `openiris_xiao_esp32s3_usb_cam_merged.bin`, **1 412 480 bytes**.
+`idf.py build` exit 0, **0 errors**, 1165/1165 targets.
+App image `build/blink.bin` is `0x148d80` bytes (1 346 944), 31 % of the 0x1e0000 app
+partition free.
+Merged image: `out/openiris_xiao_esp32s3_usb_cam_merged.bin`, **`0x158d80` bytes
+(1 412 480)** — that is `0x10000` (app offset) + `0x148d80` (app), i.e. bootloader +
+partition table + OTA data + application.
 
-Note: the build was done into `/tmp` rather than the repository directory on purpose — see
-§6, *Build-system gotcha*.
+Note: the clean build was done into `/tmp` rather than the repository directory on purpose —
+see §6, *Build-system gotcha*.
 
 ## 2. The merged image is a real, flashable factory image
 
@@ -107,10 +111,14 @@ run for real against `platform-espressif32` 7.1.3. This found three genuine defe
    `======================== [SUCCESS] ...` immediately after
    `A fatal error occurred: Could not connect to an Espressif device`. Now the status is
    checked and `env.Exit(status)` is called, so a failed flash ends with `[FAILED]`.
+5. **A missing firmware image was also reported as `[SUCCESS]`.** `_check_firmware()` printed
+   an error and returned, which SCons treated as success. It now calls `env.Exit(1)` too.
 
 Also hardened: `always_build=False` dropped (a flasher should always run); esptool discovery
 now also handles the future `tool-esptool` standalone-binary layout in addition to
-`tool-esptoolpy/esptool.py`; `--port` is omitted so esptool auto-detects.
+`tool-esptoolpy/esptool.py`; `--port` is omitted so esptool auto-detects; the image is looked
+up in four places (`../out/`, `./out/`, `../`, `./`) so the same script works in the
+repository's `flash/` project and in a flattened copy.
 
 **Verified result** (no hardware attached, so esptool is expected to stop at
 "Found 0 serial ports" — that is the proof the plumbing is right):
@@ -120,8 +128,10 @@ now also handles the future `tool-esptool` standalone-binary layout in addition 
 | `pio run` (plain) | runs `flash_openiris`, **no "Nothing to build"** ✅ |
 | `pio run --list-targets` | shows `xiao_esp32s3_usb_cam / Custom / flash_openiris` ✅ |
 | `pio run -t flash_openiris` | invokes `tool-esptoolpy/esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 "<image>"` ✅ |
-| repository `flash/` project | resolves `../openiris_xiao_esp32s3_usb_cam_merged.bin` ✅ |
-| flash with no board | reports **`[FAILED]`** and propagates the exit status ✅ |
+| repository `flash/` project | resolves `../out/openiris_xiao_esp32s3_usb_cam_merged.bin` ✅ |
+| standalone kit (`out/` next to `platformio.ini`) | resolves `out/openiris_xiao_esp32s3_usb_cam_merged.bin` ✅ |
+| flash with no board attached | ends with **`[FAILED]`**, exit status propagated ✅ |
+| image absent | prints every path it looked in, ends with **`[FAILED]`** ✅ |
 
 It was also confirmed that a first run downloads the ESP32 toolchains, openocd, the Arduino
 framework and esptool — several hundred MB — even though nothing is compiled. The shipped
@@ -171,20 +181,71 @@ These require a physical XIAO ESP32S3, a USB UVC camera and a 5 V supply:
 The power facts in the documentation come from the Seeed XIAO ESP32S3 schematic and wiki (see
 `docs/USB_CAMERA_HOST.md` §2.2), not from measurement.
 
-## 9. Deliverable checks
+## 9. Build/flash scripts, layout and CI
 
-* `cc_eye_tracker_vr_flash_kit_windows.zip` and `cc_eye_tracker_vr_vscode_flash.zip` — rebuilt
-  from the post-fix firmware and documentation. Both pass `unzip -t`, and the `.bin` inside
-  each is byte-identical (`sha256 41f6dda2…e617`, 1 412 480 bytes) to the merged image built
-  in §1 and to the copy in the repository root.
+The repository ships one script pair per job, in both shells:
+
+| Script | Purpose |
+|---|---|
+| `build.sh` / `build.bat` | build only → `out/openiris_xiao_esp32s3_usb_cam_merged.bin` |
+| `flash.sh` / `flash.bat` | write `out/…bin` at `0x0`; re-runnable, no rebuild |
+| `build_and_flash.sh` / `build_and_flash.bat` | build, pause for download mode, flash |
+
+Verified:
+
+* **`./build.sh` was executed end to end** in this repository and exited **0**, writing
+  `out/openiris_xiao_esp32s3_usb_cam_merged.bin` (1 412 480 bytes). That is the same script
+  `.github/workflows/build.yml` runs, so CI and the documentation cannot drift.
+* `./build.sh --config-only` stops after the config step (exit 0, no build).
+* `flash.sh` / `flash.bat` resolve esptool as `PATH` → Python module → PlatformIO package →
+  (Windows) pip install, and were exercised: they build exactly the command
+  `esptool.py --chip esp32s3 --baud 921600 write_flash 0x0 out/openiris_xiao_esp32s3_usb_cam_merged.bin`.
+* `out/` is gitignored (the image can contain Wi-Fi credentials) but kept in the tree by
+  `out/.gitkeep`.
+* `.github/workflows/build.yml` builds on push to `main`/`beta`, on tags, on PRs and on
+  `workflow_dispatch`, uploads `out/openiris_xiao_esp32s3_usb_cam_merged.bin` as the
+  `cc_eye_tracker_vr-firmware` artifact, and attaches it to a GitHub release on a tag. It
+  goes through `./build.sh`, and needs no board.
+* The previous multi-board `build-and-release.yml` (14 OpenIris boards, `uv` board switcher,
+  `build/merged-binary.bin`) was removed — it built boards this repository does not target and
+  pointed at the wrong output path.
+
+### Bug found while doing this
+
+`idf.py merge-bin -o <relative path>` runs esptool **inside the build directory**, so
+`-o out/foo.bin` resolved to `build/out/foo.bin` and failed with
+`FileNotFoundError: 'out/openiris_xiao_esp32s3_usb_cam_merged.bin'`, after also re-running the
+whole build (the target depends on `all`). Both scripts now pass an absolute path
+(`"${PWD}/${OUT_DIR}/${OUT_BIN}"`).
+
+### Second bug found while doing this
+
+The first version of `build.sh` deleted `sdkconfig` and then always ran
+`idf.py set-target`, which runs `fullclean` and `shutil.rmtree`s the entire build directory —
+the same lazy-delete hazard as §6. It now reuses a `build/` whose `CMakeCache.txt` already says
+`IDF_TARGET:STRING=esp32s3`, and only runs `set-target` (after moving any unusable directory
+aside with `mv`) when that is not the case. Verified: the second `./build.sh` run reported
+`reusing the configured build directory 'build'` and built incrementally.
+
+## 10. Deliverable checks
+
+* `cc_eye_tracker_vr_flash_kit_windows.zip`:
+  `flash.bat`, `out/openiris_xiao_esp32s3_usb_cam_merged.bin`, `README.txt`.
+* `cc_eye_tracker_vr_vscode_flash.zip`:
+  `platformio.ini`, `extra_scripts.py`, `out/openiris_xiao_esp32s3_usb_cam_merged.bin`,
+  `README.txt`.
+  Both pass `unzip -t`, and the `.bin` inside each is byte-identical to the merged image in
+  `out/` (verified with `sha256sum`).
 * The two earlier archives, `OpenIris_flash_kit_windows.zip` and
-  `OpenIris_vscode_flash_project.zip`, contain the **pre-fix** firmware and the **incorrect**
-  documentation. They pass `unzip -t` but are superseded; they are removed so there is only
-  one firmware image in the workspace.
-* `windows_flash/flash.bat` and the two `extra_scripts.py` copies build a command line that
-  was executed for real (see §5) — the exact esptool invocation is in
-  `VALIDATION-platformio.txt`.
+  `OpenIris_vscode_flash_project.zip`, contained the **pre-fix** firmware and the **incorrect**
+  documentation. They were removed so there is only one firmware image in the workspace.
 * `python3 -m py_compile` passes on `extra_scripts.py` (both copies) and
   `tools/apply_user_config.py`.
+* `bash -n` passes on `build.sh`, `flash.sh`, `build_and_flash.sh`.
 * `tools/apply_user_config.py --check` was run and confirmed to write nothing (exit 0, no
   `boards/generated/user_config` created).
+* Documentation consistency: the repository has exactly one README (`README.md`);
+  `START_HERE.md` and `docs/FLASHING_WINDOWS.md` were removed because they duplicated it and
+  could drift. No remaining file references either of them, or the old repository-root image
+  path. `docs/USB_CAMERA_HOST.md` is the only other prose document and is a technical
+  deep-dive that does not restate flashing/power instructions beyond what `README.md` says.

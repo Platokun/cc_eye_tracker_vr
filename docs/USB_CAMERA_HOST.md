@@ -105,7 +105,8 @@ Consequences:
   GPIO43/44 if you want to watch them.
 * **To re-flash**: the ROM bootloader still brings up USB-Serial-JTAG on its own, so
   **hold `BOOT` and replug the USB-C cable** (or hold BOOT, tap RESET, release BOOT) to
-  enter download mode, then `idf.py flash`. Unplug the camera while flashing.
+  enter download mode, then run `./flash.sh` (Linux/macOS) or `flash.bat` (Windows), or
+  `idf.py -p <PORT> flash`. Unplug the camera while flashing.
 
 ---
 
@@ -138,19 +139,15 @@ still covers the eye.
 ## 4. Build
 
 The profile lives at `boards/seed_studio/xiao_esp32s3_usb_cam` mirroring the existing
-`xiao_esp32s3` file. Two ways to build:
-
-### 4.1 With the repo's board switcher
+`xiao_esp32s3` file. `build.sh` / `build.bat` in the repository root is the supported path and
+is the same script CI runs:
 
 ```bash
-uv run ./tools/switchBoardType.py --list
-uv run ./tools/switchBoardType.py --board seed_studio/xiao_esp32s3_usb_cam --diff
-uv run ./tools/switchBoardType.py --board seed_studio/xiao_esp32s3_usb_cam
-idf.py build
-idf.py -p /dev/ttyACM0 flash monitor
+./build.sh          # -> out/openiris_xiao_esp32s3_usb_cam_merged.bin
+./flash.sh          # write it at 0x0 (board in download mode first)
 ```
 
-### 4.2 Directly with IDF, without the helper tool
+### 4.1 By hand, without the scripts
 
 ```bash
 export SDKCONFIG_DEFAULTS="boards/sdkconfig.base_defaults;boards/seed_studio/xiao_esp32s3_usb_cam;boards/generated/user_config"
@@ -158,7 +155,13 @@ python tools/apply_user_config.py           # writes boards/generated/user_confi
 rm -f sdkconfig
 idf.py set-target esp32s3
 idf.py build
-idf.py -p <PORT> flash
+idf.py merge-bin -o out/openiris_xiao_esp32s3_usb_cam_merged.bin
+```
+
+The generic board switcher also knows this profile, if you prefer it over the scripts:
+
+```bash
+uv run ./tools/switchBoardType.py --board seed_studio/xiao_esp32s3_usb_cam --diff
 ```
 
 `boards/generated/user_config` is the file `tools/apply_user_config.py` generates from
@@ -167,8 +170,9 @@ must be regenerated on a fresh clone. Omit it from `SDKCONFIG_DEFAULTS` if you i
 configure Wi-Fi at runtime through the access point instead.
 
 > If you build on a network filesystem, do not `rm -rf build` while anything is building —
-> NFS removes files lazily and will eat the new build tree. Build into a fresh directory with
-> `idf.py -B /tmp/ccbuild set-target esp32s3 && idf.py -B /tmp/ccbuild build` instead.
+> NFS removes files lazily and will eat the new build tree. `build.sh` moves an unusable
+> `build/` aside instead of deleting it; if you are working by hand, use
+> `idf.py -B /tmp/ccbuild set-target esp32s3 && idf.py -B /tmp/ccbuild build`.
 
 `idf.py` fetches `espressif/usb_host_uvc` (declared in `main/idf_component.yml`)
 automatically. The minimum version is 2.6.0; it targets ESP32-S3 with both

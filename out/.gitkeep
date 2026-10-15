@@ -1,0 +1,2 @@
+Build output lives here. Run ./build.sh (or build.bat).
+The merged image is gitignored - it can contain Wi-Fi credentials.

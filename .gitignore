@@ -105,9 +105,15 @@ tests/.env
 # Never commit this.
 boards/generated/
 
-# CONTAINS HER WIFI PASSWORD compiled into the image. Never commit this.
-openiris_xiao_esp32s3_usb_cam_merged.bin
+# Build output. The merged image may have Wi-Fi credentials compiled into it
+# and is produced by build.sh / build.bat (or by CI, which uploads it as an
+# artifact). Never commit it.
+out/*
+!out/.gitkeep
 *.bin
+
+# Stale build trees moved aside by build.sh / build.bat
+build.stale.*
 
 # PlatformIO scratch
 .pio/

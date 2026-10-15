@@ -1,0 +1,91 @@
+name: Build firmware
+
+# Builds the single board this repository targets (Seeed XIAO ESP32S3 with a USB
+# UVC camera) and uploads the merged, directly-flashable image as an artifact.
+# On a tag it also attaches that image to a GitHub release.
+#
+# The build goes through ./build.sh, which is the same script a human runs
+# locally - so CI and the documentation can never drift apart.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - beta
+    tags:
+      - "*"
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Build firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.2
+          target: esp32s3
+          path: ./
+          command: bash ./build.sh
+
+      - name: Show build output
+        run: ls -l out/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc_eye_tracker_vr-firmware
+          path: out/openiris_xiao_esp32s3_usb_cam_merged.bin
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Job summary
+        run: |
+          {
+            echo "### cc_eye_tracker_vr firmware"
+            echo
+            echo 'Artifact: `out/openiris_xiao_esp32s3_usb_cam_merged.bin`'
+            echo
+            echo 'Flash it at offset **0x0** (hold BOOT, plug in USB-C, release BOOT first).'
+            echo
+            ls -l out/openiris_xiao_esp32s3_usb_cam_merged.bin
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware
+        uses: actions/download-artifact@v4
+        with:
+          name: cc_eye_tracker_vr-firmware
+          path: out/
+
+      - name: Show downloaded artifact
+        run: ls -l out/
+
+      - name: Attach firmware to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/openiris_xiao_esp32s3_usb_cam_merged.bin
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
